@@ -5,6 +5,7 @@ import urllib
 import pykka
 from mopidy import backend, models
 import pandora
+from mopidy_pandora.pydora import AlwaysOnAPIClient
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,7 @@ class PandoraBackend(pykka.ThreadingActor, backend.Backend):
             "DEVICE": config["partner_device"],
             "DEFAULT_AUDIO_QUALITY": config.get("preferred_audio_quality", 'mediumQuality')
         }
-        self.api = pandora.APIClient.from_settings_dict(settings)
+        self.api = AlwaysOnAPIClient.from_settings_dict(settings)
         self.api.login(username=config["username"], password=config["password"])
 
         self.library = PandoraLibraryProvider(backend=self)
@@ -43,10 +44,19 @@ class PandoraPlaybackProvider(backend.PlaybackProvider):
 
         while True:
             try:
-                return next(self.tracks)
+                track = next(self.tracks)
+                # Check if the track is playable
+                if self.backend.api.playable(track):
+                    return track
+                else:
+                    # Tracks have expired, retrieve fresh playlist from Pandora
+                    self.tracks = self._get_playlist(station_token)
             except StopIteration:
-                self.tracks = (pandora.models.pandora.PlaylistItem.from_json(self.backend.api, station)
-                               for station in self.backend.api.get_playlist(self.station_token)['items'])
+                self.tracks = self._get_playlist(station_token)
+
+    def _get_playlist(self, station_token):
+        return (pandora.models.pandora.PlaylistItem.from_json(self.backend.api, station)
+            for station in self.backend.api.get_playlist(self.station_token)['items'])
 
     def change_track(self, track):
         track_uri = PandoraUri.parse(track.uri)
