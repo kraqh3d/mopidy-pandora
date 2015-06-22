@@ -1,7 +1,23 @@
+import functools
 import requests
-from pandora import APIClient, PandoraException
+import pandora
 
-class AlwaysOnAPIClient(APIClient):
+
+def authenticated(f):
+    @functools.wraps(f)
+    def with_authentication(self, *args, **kwargs):
+        try:
+            return f(self, *args, **kwargs)
+        except pandora.PandoraException as e:
+            if e.message == "Invalid Auth Token":
+                # Re-authenticate and retry if we lost auth
+                self.authenticate()
+                return f(self, *args, **kwargs)
+            raise
+    return with_authentication
+
+
+class AlwaysOnAPIClient(object):
     """Pydora API Client for Mopidy-Pandora
 
     This API client automatically re-authenticates itself if the Pandora authorization token
@@ -11,64 +27,35 @@ class AlwaysOnAPIClient(APIClient):
     Detects 'Invalid Auth Token' messages from the Pandora server, and repeats the last
     request after logging in to the Pandora server again.
     """
+    def __init__(self, config):
+        self.settings = {
+            "API_HOST": config.get("api_host", 'tuner.pandora.com/services/json/'),
+            "DECRYPTION_KEY": config["partner_decryption_key"],
+            "ENCRYPTION_KEY": config["partner_encryption_key"],
+            "USERNAME": config["partner_username"],
+            "PASSWORD": config["partner_password"],
+            "DEVICE": config["partner_device"],
+            "DEFAULT_AUDIO_QUALITY": config.get("preferred_audio_quality", 'mediumQuality')
+        }
+        self.username = config["username"]
+        self.password = config["password"]
+        self.authenticate()
 
-    def login(self, username, password):
-
-        # Store username and password so that client can re-authenticate itself if required.
-        self.username = username
-        self.password = password
-
-        return super(AlwaysOnAPIClient, self).login(username, password)
-
-
-    def re_authenticate(self):
-
-        # Invalidate old tokens to ensure that the pydora transport layer creates new ones
-        self.transport.user_auth_token = None
-        self.transport.partner_auth_token = None
-
-        # Reset sync times for new Pandora session
-        self.transport.start_time = None
-        self.transport.server_sync_time = None
-
-        self.login(self.username, self.password)
-
+    def authenticate(self):
+        self.api = pandora.APIClient.from_settings_dict(self.settings)
+        self.api.login(username=self.username, password=self.password)
 
     def playable(self, track):
-
         # Retrieve header information of the track's audio_url. Status code 200 implies that
         # the URL is valid and that the track is accessible
-        url = track.audio_url
-        r = requests.head(url)
-        if r.status_code == 200:
-            return True
+        r = requests.head(track.audio_url)
+        return r.status_code == 200
 
-        return False
-
-
+    @authenticated
     def get_station_list(self):
+        return self.api.get_station_list()
 
-        try:
-            return super(AlwaysOnAPIClient, self).get_station_list()
-        except PandoraException as e:
-
-            if e.message == "Invalid Auth Token":
-                self.re_authenticate()
-                return super(AlwaysOnAPIClient, self).get_station_list()
-            else:
-                # Exception is not token related, re-throw to be handled elsewhere
-                raise e
-
-
+    @authenticated
     def get_playlist(self, station_token):
-
-        try:
-            return super(AlwaysOnAPIClient, self).get_playlist(station_token)
-        except PandoraException as e:
-
-            if e.message == "Invalid Auth Token":
-                self.re_authenticate()
-                return super(AlwaysOnAPIClient, self).get_playlist(station_token)
-            else:
-                # Exception is not token related, re-throw to be handled elsewhere
-                raise e
+        return (pandora.models.pandora.PlaylistItem.from_json(self.api, station)
+                for station in self.api.get_playlist(station_token)['items'])

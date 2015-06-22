@@ -4,7 +4,6 @@ import logging
 import urllib
 import pykka
 from mopidy import backend, models
-import pandora
 from mopidy_pandora.pydora import AlwaysOnAPIClient
 
 logger = logging.getLogger(__name__)
@@ -15,19 +14,7 @@ class PandoraBackend(pykka.ThreadingActor, backend.Backend):
 
     def __init__(self, config, audio):
         super(PandoraBackend, self).__init__()
-        config = config['pandora']
-        settings = {
-            "API_HOST": config.get("api_host", 'tuner.pandora.com/services/json/'),
-            "DECRYPTION_KEY": config["partner_decryption_key"],
-            "ENCRYPTION_KEY": config["partner_encryption_key"],
-            "USERNAME": config["partner_username"],
-            "PASSWORD": config["partner_password"],
-            "DEVICE": config["partner_device"],
-            "DEFAULT_AUDIO_QUALITY": config.get("preferred_audio_quality", 'mediumQuality')
-        }
-        self.api = AlwaysOnAPIClient.from_settings_dict(settings)
-        self.api.login(username=config["username"], password=config["password"])
-
+        self.api = AlwaysOnAPIClient(config['pandora'])
         self.library = PandoraLibraryProvider(backend=self)
         self.playback = PandoraPlaybackProvider(audio=audio, backend=self)
 
@@ -50,13 +37,9 @@ class PandoraPlaybackProvider(backend.PlaybackProvider):
                     return track
                 else:
                     # Tracks have expired, retrieve fresh playlist from Pandora
-                    self.tracks = self._get_playlist(station_token)
+                    self.tracks = self.backend.api.get_playlist(station_token)
             except StopIteration:
-                self.tracks = self._get_playlist(station_token)
-
-    def _get_playlist(self, station_token):
-        return (pandora.models.pandora.PlaylistItem.from_json(self.backend.api, station)
-            for station in self.backend.api.get_playlist(self.station_token)['items'])
+                self.tracks = self.backend.api.get_playlist(station_token)
 
     def change_track(self, track):
         track_uri = PandoraUri.parse(track.uri)
