@@ -211,6 +211,8 @@ class PandoraLibraryProvider(backend.LibraryProvider):
         track_uri = PandoraUri.factory(track)
         if isinstance(track_uri, AdItemUri):
             track_name = 'Advertisement'
+            # get next track
+            return self.get_next_pandora_track(station_id)
         else:
             track_name = track.song_name
 
